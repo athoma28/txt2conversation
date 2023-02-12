@@ -1,11 +1,12 @@
 import requests
 import json
+import os
 
 #paste API keys here
-ELEVENLABS_API_KEY = ''
-OPENAI_API_KEY = ''
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
-def get_voiceID_dict(elevenlabs_api_key):
+def get_voiceID_dict():
     """
     Gets all voices available to your account
 
@@ -14,13 +15,22 @@ def get_voiceID_dict(elevenlabs_api_key):
     """
     headers = {
         'accept': 'application-json',
-        'xi-api-key': elevenlabs_api_key,
+        'xi-api-key': ELEVENLABS_API_KEY,
     }
     response = requests.get('https://api.elevenlabs.io/v1/voices', headers=headers)
     response_json = json.loads(response.content)
-    return response_json
 
-def get_voice(voice_id, text, key=ELEVENLABS_API_KEY):
+    voices = {}
+    for voice in response_json['voices']:
+          if voice['category'] == 'cloned':
+              voices[voice['name'].casefold()] = voice
+
+    print("Found elevenlabs voices:")
+    print(voices.keys())
+
+    return voices
+
+def get_voice(voice_id, text):
     """
     Gets the raw data in a specified voice for a specified text string.
     Returns None if the API call fails.
@@ -33,7 +43,7 @@ def get_voice(voice_id, text, key=ELEVENLABS_API_KEY):
     url = 'https://api.elevenlabs.io/v1/text-to-speech/' + voice_id
     headers = {
         'accept': 'audio/mpeg',
-        'xi-api-key': key,
+        'xi-api-key': ELEVENLABS_API_KEY,
         'Content-Type': 'application/json',
     }
     payload = {
@@ -66,12 +76,11 @@ def clean_conversation_output(line):
     return line
 
 
-def gpt3_return_output(prompt, key=OPENAI_API_KEY, max_tokens=250, model="text-davinci-003",temperature=0.82):
+def gpt3_return_output(prompt, max_tokens=250, model="text-davinci-003",temperature=0.82):
     """
     Returns a text string from GPT-3 after an API call with a prompt and generation settings.
 
     :param prompt: String to prompt GPT-3 with
-    :param key: OpenAI API key
     :param max_tokens: Maximum number of tokens to generate
     :param model: GPT-3 model
     :param temperature: Likeliness of the model to produce repetitive, derivative output. Max is 1.
@@ -79,7 +88,7 @@ def gpt3_return_output(prompt, key=OPENAI_API_KEY, max_tokens=250, model="text-d
     """
     headers = {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + key,
+        'Authorization': 'Bearer ' + OPENAI_API_KEY,
     }
     json_data = {
         'model': model,
@@ -93,7 +102,7 @@ def gpt3_return_output(prompt, key=OPENAI_API_KEY, max_tokens=250, model="text-d
     print(output)
     return output
 
-def create_prompt_string(subject="",middle="", chat_middle=""):
+def create_conversation_prompt_string(subject="",middle="", chat_middle=""):
     """
     This is a method that wraps a simplified prompt in longer boilerplate text to easily generate something that would require more prompt conditioning.
     In this example, the prompt is for a back-and-forth argument about a custom topic.
@@ -109,6 +118,12 @@ def create_prompt_string(subject="",middle="", chat_middle=""):
     prompt = chat_intro+chat_middle+chat_end
     return prompt
 
+def create_script_prompt_string(tv_show="Star Trek TNK", subject="", voice_map={}, narrator_voice=""):
+    prompt_intro = f"Write a script for an episode of {tv_show} comprised entirely of dialogue and narration. Each line should start with the name of the character in all caps with a colon, or NARRATOR:, then what they say in the episode."
+    prompt_characters = ", ".join([voice for voice in voice_map.keys()])
+    prompt_end = f"\n\nThis episode is about {subject} and it features the characters {prompt_characters} \n\n"
+    return prompt_intro + prompt_end
+
 
 def audio_conversation(starter_prompt,voice1,voice2, turn_count,max_tokens=25,temperature=0.6):
     """
@@ -123,14 +138,14 @@ def audio_conversation(starter_prompt,voice1,voice2, turn_count,max_tokens=25,te
     :return: Data that can be written to a WAV file, switching between two speakers, having a natural conversation.
     The data is formatted into a dictionary where index 0 is the WAV data and index 1 is the string representing the full conversation transcript.
     """
-    text_line = gpt3_return_output(create_prompt_string(starter_prompt),max_tokens=max_tokens,temperature=temperature)
-    # this line prompts GPT-3 with the custom expanded prompt created by create_prompt_string, resulting in the first line of generated conversation
+    text_line = gpt3_return_output(create_conversation_prompt_string(starter_prompt),max_tokens=max_tokens,temperature=temperature)
+    # this line prompts GPT-3 with the custom expanded prompt created by create_conversation_prompt_string, resulting in the first line of generated conversation
     conversation = get_voice(voice1,text_line)
     # this starts a "conversation" variable that holds generated audio data. Each line of the conversation will be added to this variable.
     transcript = text_line
     for x in range(0, turn_count):
         if x < turn_count:
-            text_line = gpt3_return_output(create_prompt_string(starter_prompt,middle=transcript),max_tokens=max_tokens,temperature=temperature)
+            text_line = gpt3_return_output(create_conversation_prompt_string(starter_prompt,middle=transcript),max_tokens=max_tokens,temperature=temperature)
             # this line prompts GPT-3 again, this time using the "middle" parameter to insert the transcript of the existing conversation.
             if x % 2 == 0:
                 conversation += get_voice(voice2,text_line)
@@ -143,15 +158,78 @@ def audio_conversation(starter_prompt,voice1,voice2, turn_count,max_tokens=25,te
             # Second, it gets fed back into the prompt on the next loop so that the prompt has the memory of the full conversation.
     return [conversation, transcript]
 
+def audio_script(tv_show, episode_subject, narrator_voice, character_voice_map, available_voices, temperature=0.6):
+    """
+    Write a script for an episode of a TV show with each character in character_voice_map, voiced by their corresponding value
+    :param temperature: GPT-3 temperature
+    :return: Data that can be written to a WAV file, switching between two speakers, having a natural conversation.
+    The data is formatted into a dictionary where index 0 is the WAV data and index 1 is the string representing the full conversation transcript.
+    """
+    script_prompt = create_script_prompt_string(tv_show, episode_subject, character_voice_map, narrator_voice)
+    script_text = gpt3_return_output(script_prompt, max_tokens=2000, temperature=temperature)
+
+    script_arr = script_text.split('\n')
+    script_parts = []
+
+    script_audio = bytearray()
+    transcript = ""
+    narrator_voice = narrator_voice.casefold()
+
+    for line_text in script_arr:
+        line_parts = line_text.split(':')
+        if len(line_parts) > 1:
+            character = line_parts[0].strip().casefold()
+            dialogue = line_parts[1].strip()
+            script_parts.append((character, dialogue))
+
+            voice_id = ""
+            if character == "narrator":
+                voice_id = available_voices[narrator_voice]['voice_id']
+            elif character in character_voice_map:
+                voice_name = character_voice_map[character]
+                voice_id = available_voices[voice_name]['voice_id']
+
+            if not voice_id == "":
+                script_audio.extend(get_voice(voice_id, dialogue))
+            else:
+                print(f"MISSING CHARACTER VOICE: {character}")
+
+            transcript += line_text
+
+    return script_audio, transcript
+
 
 # This section is for testing the various functions.
+if __name__ == "__main__":
 
-testprompt = "about addiction to AI-generated deepfakes. The first person spends all his time looking at them, and the other is trying to warn him away. Include detailed descriptions of the addict's destructive behavior in the dialogue."
+    testprompt = "about addiction to AI-generated deepfakes. The first person spends all his time looking at them, and the other is trying to warn him away. Include detailed descriptions of the addict's destructive behavior in the dialogue."
+    if False:
+        testconversation = audio_conversation(testprompt,3,max_tokens=200,temperature=0.5)
 
-testconversation = audio_conversation(testprompt,'IhjBds864xnXAJND0z44','lEOEctIdusALaZkXFtPc',3,max_tokens=30,temperature=0.5)
+        with open("outputs/testconversation_argument.wav", 'wb') as f:
+            f.write(testconversation[0])
 
-with open("outputs/testconversation_argument.wav", 'wb') as f:
-    f.write(testconversation[0])
+        with open("outputs/testconversation_argument.txt","w") as f:
+            f.write(testconversation[1])
 
-with open("outputs/testconversation_argument.txt","w") as f:
-    f.write(testconversation[1])
+    tv_show = "Star Trek TNG"
+    episode_subject = "Wesley Crusher causes everyone to poop their pants and the ship explodes. this episode contains only 3 lines of dialgoue. it's very short. only 3 lines"
+    narrator_voice = "cane mimic"
+    character_voices = {
+        "picard": "stewart serious",
+        #"data": "domo",
+        "dr. crusher": "asmr",
+        "wesley crusher": "joker"
+    }
+
+    available_voices = get_voiceID_dict()
+    script_audio, script_transcript = audio_script(tv_show, episode_subject, narrator_voice, character_voices, available_voices)
+
+    with open("outputs/test_script.wav", 'wb') as f:
+        f.write(script_audio)
+
+    with open("outputs/test_script.txt","w") as f:
+        f.write(script_transcript)
+
+    print("Audio output successfully!")
+    
