@@ -55,10 +55,6 @@ def get_voice(voice_id, text):
             return response.content
     else: return None
 
-
-# with open("testalexvoice.wav", 'wb') as f:
-#     f.write(get_voice('IhjBds864xnXAJND0z44',"Hey, I'm walkin' here!"))
-
 def clean_conversation_output(line):
     """
     Helper function for cleaning speaker IDs out of a generated GPT-3 conversation
@@ -118,10 +114,16 @@ def create_conversation_prompt_string(subject="",middle="", chat_middle=""):
     prompt = chat_intro+chat_middle+chat_end
     return prompt
 
-def create_script_prompt_string(tv_show="Star Trek TNK", subject="", voice_map={}, narrator_voice=""):
+def create_script_prompt_string(tv_show="Star Trek TNG", subject="", voice_map={}, narrator_voice=""):
+    prompt_intro = f"Write a script for an episode of {tv_show} comprised entirely of dialogue. Each line should start with the name of the character in all caps with a colon, then what they say in the episode."
+    prompt_characters = ", ".join([voice for voice in voice_map.keys()])
+    prompt_end = f"\n\nThis episode is about {subject} and it can feature the characters {prompt_characters}, but it will leave out any characters not significant to the plot. The writing is profilic, poetic, and creative such that the full character of each voice comes through in both comedic and dramatic ways. The writing is engaging and sophisticated. \n\n"
+    return prompt_intro + prompt_end
+
+def create_narrated_script_prompt_string(tv_show="Star Trek TNK", subject="", voice_map={}, narrator_voice=""):
     prompt_intro = f"Write a script for an episode of {tv_show} comprised entirely of dialogue and narration. Each line should start with the name of the character in all caps with a colon, or NARRATOR:, then what they say in the episode."
     prompt_characters = ", ".join([voice for voice in voice_map.keys()])
-    prompt_end = f"\n\nThis episode is about {subject} and it features the characters {prompt_characters} \n\n"
+    prompt_end = f"\n\nThis episode is about {subject} and it features the characters {prompt_characters}. The writing is profilic, poetic, and creative such that the full character of each voice comes through in both comedic and dramatic ways. The writing is engaging and sophisticated. \n\n"
     return prompt_intro + prompt_end
 
 
@@ -158,7 +160,7 @@ def audio_conversation(starter_prompt,voice1,voice2, turn_count,max_tokens=25,te
             # Second, it gets fed back into the prompt on the next loop so that the prompt has the memory of the full conversation.
     return [conversation, transcript]
 
-def audio_script(tv_show, episode_subject, narrator_voice, character_voice_map, available_voices, temperature=0.6):
+def audio_script(tv_show, episode_subject, narrator_voice, character_voice_map, available_voices, temperature=0.6, confirm_TTS=False):
     """
     Write a script for an episode of a TV show with each character in character_voice_map, voiced by their corresponding value
     :param temperature: GPT-3 temperature
@@ -166,7 +168,17 @@ def audio_script(tv_show, episode_subject, narrator_voice, character_voice_map, 
     The data is formatted into a dictionary where index 0 is the WAV data and index 1 is the string representing the full conversation transcript.
     """
     script_prompt = create_script_prompt_string(tv_show, episode_subject, character_voice_map, narrator_voice)
-    script_text = gpt3_return_output(script_prompt, max_tokens=2000, temperature=temperature)
+    script_text = ""
+
+    if confirm_TTS:
+        script_confirmed = False
+        while not script_confirmed:
+            script_text = gpt3_return_output(script_prompt, max_tokens=2000, temperature=temperature)
+            print("Generate audio for this script? (y/n)")
+            user_input = input().casefold()
+            script_confirmed = user_input == "y"
+    else:
+        script_text = gpt3_return_output(script_prompt, max_tokens=2000, temperature=temperature)
 
     script_arr = script_text.split('\n')
     script_parts = []
@@ -194,7 +206,7 @@ def audio_script(tv_show, episode_subject, narrator_voice, character_voice_map, 
             else:
                 print(f"MISSING CHARACTER VOICE: {character}")
 
-            transcript += line_text
+            transcript += line_text + "\n\n"
 
     return script_audio, transcript
 
@@ -212,18 +224,38 @@ if __name__ == "__main__":
         with open("outputs/testconversation_argument.txt","w") as f:
             f.write(testconversation[1])
 
-    tv_show = "Star Trek TNG"
-    episode_subject = "Wesley Crusher causes everyone to poop their pants and the ship explodes. this episode contains only 3 lines of dialgoue. it's very short. only 3 lines"
-    narrator_voice = "cane mimic"
-    character_voices = {
+    CAST_OF_STAR_TREK_TNG = {
         "picard": "stewart serious",
-        #"data": "domo",
-        "dr. crusher": "asmr",
-        "wesley crusher": "joker"
+        "data": "don",
+        #"riker": "magina",
+        "troi": "asmr",
+        #"worf": "joker",
+        #"wesley": "domo asmr",
+        #"geordi": "mull",
+        #"ensign": "burr",
+        #"q": "huntersing"
     }
 
+    CAST_OF_X_FILES = {
+        "mulder": "mull",
+        "scully": "domo asmr",
+        "sheriff": "burr"
+    }
+
+    CAST_OF_MAD_MEN = {
+        "don": "don",
+        "roger": "burr",
+        "peggy": "domo asmr",
+        "client": "q"
+    }
+
+    tv_show = "Mad Men"
+    episode_subject = "Don creates an ad slogan for a new product"
+    narrator_voice = "cane mimic"
+    character_voices = CAST_OF_MAD_MEN
+
     available_voices = get_voiceID_dict()
-    script_audio, script_transcript = audio_script(tv_show, episode_subject, narrator_voice, character_voices, available_voices)
+    script_audio, script_transcript = audio_script(tv_show, episode_subject, narrator_voice, character_voices, available_voices, temperature=0.6, confirm_TTS=True)
 
     with open("outputs/test_script.wav", 'wb') as f:
         f.write(script_audio)
